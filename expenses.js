@@ -92,6 +92,21 @@ function totalBy(rows, key) {
   return totals;
 }
 
+// Highest-spending category. Ties break on category name so output is stable.
+function topCategory(rows) {
+  let winner = null;
+  for (const [category, amount] of totalBy(rows, 'category')) {
+    if (
+      winner === null ||
+      amount > winner.amount ||
+      (amount === winner.amount && category < winner.category)
+    ) {
+      winner = { category, amount };
+    }
+  }
+  return winner;
+}
+
 function money(value) {
   return value.toFixed(2);
 }
@@ -132,11 +147,18 @@ function main() {
   printTable('Total per month', byMonth);
   printTable('Total per category', byCategory);
   console.log(`Grand total: ${money(grandTotal)}`);
+
+  const top = topCategory(rows);
+  console.log(`Top category: ${top.category} (${money(top.amount)})`);
 }
 
-try {
-  main();
-} catch (err) {
-  console.error(`expenses: ${err.message}`);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    console.error(`expenses: ${err.message}`);
+    process.exit(1);
+  }
 }
+
+module.exports = { splitLine, parseCsv, totalBy, topCategory, money };
