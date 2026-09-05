@@ -23,7 +23,7 @@ node --check expenses.js      # syntax check; there is no build or lint step
 
 ## Input format
 
-CSV with a header row containing `date`, `category`, `amount` (case-insensitive, order-independent — columns are located by name, extra columns are ignored). `date` must be `YYYY-MM-DD`; the month bucket is `date.slice(0, 7)`, so no `Date` object is ever constructed and there are no timezone effects. Any malformed row aborts the whole run with a `file:line` message on stderr and exit code 1 — the parser is strict, not lenient, by design.
+CSV with a header row containing `date`, `category`, `amount` (case-insensitive, order-independent — columns are located by name, extra columns are ignored). `date` must be `YYYY-MM-DD`; the month bucket is `date.slice(0, 7)`, so no `Date` object is ever constructed and there are no timezone effects. Any malformed row aborts the whole run with a `file:line` message on stderr and exit code 1 — the parser is strict, not lenient, by design. A blank or whitespace-only `amount` is rejected, not coerced: `Number('')` is `0`, so the explicit empty check in `parseCsv` is the only thing stopping a missing cell from being reported as `0.00`. Keep it ahead of the `Number.isFinite` check.
 
 ## Architecture
 

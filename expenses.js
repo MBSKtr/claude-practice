@@ -62,7 +62,10 @@ function parseCsv(text, file) {
 
     const date = fields[index.date] || '';
     const category = fields[index.category] || '';
-    const amount = Number(fields[index.amount]);
+    // Number('') is 0, so an empty amount must be rejected before the
+    // isFinite check or a blank cell silently becomes 0.00.
+    const rawAmount = fields[index.amount] || '';
+    const amount = Number(rawAmount);
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       throw new Error(`${file}:${lineNo}: date must be YYYY-MM-DD, got "${date}"`);
@@ -70,8 +73,11 @@ function parseCsv(text, file) {
     if (category === '') {
       throw new Error(`${file}:${lineNo}: category is empty`);
     }
+    if (rawAmount === '') {
+      throw new Error(`${file}:${lineNo}: amount is empty`);
+    }
     if (!Number.isFinite(amount)) {
-      throw new Error(`${file}:${lineNo}: amount is not a number, got "${fields[index.amount]}"`);
+      throw new Error(`${file}:${lineNo}: amount is not a number, got "${rawAmount}"`);
     }
 
     rows.push({ month: date.slice(0, 7), category, amount });

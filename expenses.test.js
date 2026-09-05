@@ -74,6 +74,21 @@ test('parseCsv rejects malformed input with a file:line message', () => {
   assert.throws(() => parseCsv('date,category,amount', 'test.csv'), /no data rows/);
 });
 
+test('parseCsv rejects a blank amount rather than treating it as 0', () => {
+  // Number('') === 0, so without an explicit guard a blank cell would be
+  // silently reported as 0.00 and the row would count toward the totals.
+  assert.strictEqual(Number(''), 0);
+  assert.throws(
+    () => parseCsv('date,category,amount\n2026-01-01,Rent,', 'test.csv'),
+    /test\.csv:2: amount is empty/,
+  );
+});
+
+test('parseCsv rejects a whitespace-only or missing amount field', () => {
+  assert.throws(() => parseCsv('date,category,amount\n2026-01-01,Rent,   ', 'test.csv'), /amount is empty/);
+  assert.throws(() => parseCsv('date,category,amount\n2026-01-01,Rent', 'test.csv'), /amount is empty/);
+});
+
 test('totalBy sums amounts per key', () => {
   const rows = parseCsv(CSV, 'test.csv');
   assert.deepStrictEqual([...totalBy(rows, 'month')], [
@@ -147,6 +162,19 @@ test('CLI top line agrees with the first row of the category table on a tie', ()
     const firstRow = lines.slice(header + 1).find((line) => line.trim() !== '');
     assert.match(firstRow, /Apples/);
     assert.match(lines.join('\n'), /Top category: Apples \(50\.00\)/);
+  });
+});
+
+test('CLI reports a blank amount with file:line and exits 1', () => {
+  withCsv('date,category,amount\n2026-01-01,Rent,100.00\n2026-01-02,Food,\n', (csv) => {
+    assert.throws(
+      () => runCli([csv]),
+      (err) => {
+        assert.strictEqual(err.status, 1);
+        assert.match(err.stderr, /expenses: .*:3: amount is empty/);
+        return true;
+      },
+    );
   });
 });
 
