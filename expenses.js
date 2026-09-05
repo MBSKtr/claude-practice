@@ -92,6 +92,19 @@ function totalBy(rows, key) {
   return totals;
 }
 
+// Orders [label, amount] entries largest first, breaking ties on the label so
+// the category table and the "Top category" line can never disagree.
+function byAmountDesc(a, b) {
+  if (b[1] !== a[1]) return b[1] - a[1];
+  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+}
+
+// Highest-spending category, or null when there are no rows.
+function topCategory(rows) {
+  const [top] = [...totalBy(rows, 'category')].sort(byAmountDesc);
+  return top === undefined ? null : { category: top[0], amount: top[1] };
+}
+
 function money(value) {
   return value.toFixed(2);
 }
@@ -125,18 +138,25 @@ function main() {
 
   // Months sort naturally as YYYY-MM strings; categories go largest spend first.
   const byMonth = [...totalBy(rows, 'month')].sort((a, b) => a[0].localeCompare(b[0]));
-  const byCategory = [...totalBy(rows, 'category')].sort((a, b) => b[1] - a[1]);
+  const byCategory = [...totalBy(rows, 'category')].sort(byAmountDesc);
   const grandTotal = rows.reduce((sum, row) => sum + row.amount, 0);
 
   console.log(`Expense report for ${file} (${rows.length} transactions)\n`);
   printTable('Total per month', byMonth);
   printTable('Total per category', byCategory);
   console.log(`Grand total: ${money(grandTotal)}`);
+
+  const top = topCategory(rows);
+  console.log(`Top category: ${top.category} (${money(top.amount)})`);
 }
 
-try {
-  main();
-} catch (err) {
-  console.error(`expenses: ${err.message}`);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    console.error(`expenses: ${err.message}`);
+    process.exit(1);
+  }
 }
+
+module.exports = { splitLine, parseCsv, totalBy, byAmountDesc, topCategory, money };
