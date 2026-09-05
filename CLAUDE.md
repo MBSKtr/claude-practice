@@ -32,7 +32,8 @@ CSV with a header row containing `date`, `category`, `amount` (case-insensitive,
 - `splitLine` — one-line CSV field splitter that handles double-quoted fields containing commas and `""` escapes. This exists so the tool stays dependency-free; extend it here rather than reaching for a library.
 - `parseCsv` — validates the header, then validates and normalizes each row into `{ month, category, amount }`. Rows lose their day-of-month at this point; anything needing full dates must change this shape.
 - `totalBy(rows, key)` — the single aggregation primitive, returning a `Map`. Both reports are built from it; a new breakdown (e.g. per year) should be another `totalBy` call, not new summing logic.
-- `topCategory` — the single highest-spending category, built on `totalBy`. Ties break on category name so output is deterministic.
+- `topCategory` — the single highest-spending category, built on `totalBy`.
+- `byAmountDesc` — the shared comparator for `[label, amount]` entries: largest first, ties broken on label. Both the category table and `topCategory` sort with it, which is what keeps the table's first row and the `Top category` line in agreement. Change the ordering here, not in one caller.
 - `printTable` — column widths are computed from the entries, so alignment adapts to the data.
 
 Sort orders are deliberate: months ascending as `YYYY-MM` strings (which sort chronologically without parsing), categories descending by amount so the largest spend leads.

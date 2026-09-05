@@ -3,9 +3,37 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
-const { splitLine, parseCsv, totalBy, topCategory, money } = require('./expenses.js');
+const {
+  splitLine,
+  parseCsv,
+  totalBy,
+  byAmountDesc,
+  topCategory,
+  money,
+} = require('./expenses.js');
+
+const CLI = path.join(__dirname, 'expenses.js');
+
+// cwd is pinned: expenses.js resolves its CSV argument relative to process.cwd(),
+// so without this the CLI tests pass or fail depending on where they are run from.
+function runCli(args = [], cwd = __dirname) {
+  return execFileSync(process.execPath, [CLI, ...args], { encoding: 'utf8', cwd, stdio: 'pipe' });
+}
+
+// Writes a throwaway CSV and removes it afterwards.
+function withCsv(contents, fn) {
+  const file = path.join(os.tmpdir(), `expenses-test-${process.pid}-${Math.random().toString(36).slice(2)}.csv`);
+  fs.writeFileSync(file, contents);
+  try {
+    return fn(file);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
 
 const CSV = [
   'date,category,amount',
@@ -58,6 +86,15 @@ test('totalBy sums amounts per key', () => {
   ]);
 });
 
+test('byAmountDesc orders largest first and breaks ties on label', () => {
+  const entries = [['Zoo', 50], ['Apples', 50], ['Rent', 100]];
+  assert.deepStrictEqual([...entries].sort(byAmountDesc), [
+    ['Rent', 100],
+    ['Apples', 50],
+    ['Zoo', 50],
+  ]);
+});
+
 test('topCategory returns the highest-spending category', () => {
   const rows = parseCsv(CSV, 'test.csv');
   assert.deepStrictEqual(topCategory(rows), { category: 'Rent', amount: 100 });
@@ -79,27 +116,43 @@ test('topCategory breaks ties on category name for stable output', () => {
   assert.deepStrictEqual(topCategory(rows), { category: 'Apples', amount: 50 });
 });
 
+test('topCategory returns null when there are no rows', () => {
+  assert.strictEqual(topCategory([]), null);
+});
+
 test('money formats to two decimal places', () => {
   assert.strictEqual(money(5), '5.00');
   assert.strictEqual(money(1234.5), '1234.50');
 });
 
 test('CLI prints the top category for the sample file', () => {
-  const output = execFileSync(process.execPath, [path.join(__dirname, 'expenses.js')], {
-    encoding: 'utf8',
-  });
+  const output = runCli();
   assert.match(output, /Total per month/);
   assert.match(output, /Total per category/);
   assert.match(output, /Grand total: 5225\.69/);
   assert.match(output, /Top category: Rent \(4350\.00\)/);
 });
 
+test('CLI reads an absolute path regardless of the working directory', () => {
+  withCsv('date,category,amount\n2026-04-01,Books,7.50\n', (csv) => {
+    const output = runCli([csv], os.homedir());
+    assert.match(output, /Top category: Books \(7\.50\)/);
+  });
+});
+
+test('CLI top line agrees with the first row of the category table on a tie', () => {
+  withCsv('date,category,amount\n2026-01-01,Zoo,50.00\n2026-01-02,Apples,50.00\n', (csv) => {
+    const lines = runCli([csv]).split('\n');
+    const header = lines.findIndex((line) => line.startsWith('Total per category'));
+    const firstRow = lines.slice(header + 1).find((line) => line.trim() !== '');
+    assert.match(firstRow, /Apples/);
+    assert.match(lines.join('\n'), /Top category: Apples \(50\.00\)/);
+  });
+});
+
 test('CLI exits 1 with a message when the file is missing', () => {
   assert.throws(
-    () => execFileSync(process.execPath, [path.join(__dirname, 'expenses.js'), 'nope.csv'], {
-      encoding: 'utf8',
-      stdio: 'pipe',
-    }),
+    () => runCli(['nope.csv']),
     (err) => {
       assert.strictEqual(err.status, 1);
       assert.match(err.stderr, /expenses: no such file: nope\.csv/);
