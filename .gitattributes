@@ -1,0 +1,3 @@
+# Normalize to LF in the repository; Git still checks out CRLF on Windows
+# where the platform wants it. Keeps the working tree and commits consistent.
+* text=auto eol=lf
