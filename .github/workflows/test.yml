@@ -1,0 +1,30 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the minimum declared in package.json's engines field, so it is
+        # tested to keep that claim honest; 20 and 22 are the maintained LTS lines.
+        node-version: ['18', '20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # No install step: the project has no dependencies and no lockfile, so
+      # there is nothing for `npm ci` to do. Keep it that way.
+      - run: node --check expenses.js
+      - run: npm test
