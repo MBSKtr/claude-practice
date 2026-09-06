@@ -13,6 +13,9 @@ const {
   totalBy,
   byAmountDesc,
   topCategory,
+  round2,
+  summarize,
+  parseArgs,
   money,
 } = require('./expenses.js');
 
@@ -26,7 +29,8 @@ function runCli(args = [], cwd = __dirname) {
 
 // Writes a throwaway CSV and removes it afterwards.
 function withCsv(contents, fn) {
-  const file = path.join(os.tmpdir(), `expenses-test-${process.pid}-${Math.random().toString(36).slice(2)}.csv`);
+  const name = 'expenses-test-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.csv';
+  const file = path.join(os.tmpdir(), name);
   fs.writeFileSync(file, contents);
   try {
     return fn(file);
@@ -140,12 +144,115 @@ test('money formats to two decimal places', () => {
   assert.strictEqual(money(1234.5), '1234.50');
 });
 
+test('round2 rounds to cents and returns a number, not a string', () => {
+  assert.strictEqual(round2(0.1 + 0.2), 0.3);
+  assert.strictEqual(round2(1234.567), 1234.57);
+  assert.strictEqual(typeof round2(5), 'number');
+});
+
+test('summarize produces the documented shape', () => {
+  const rows = parseCsv(CSV, 'test.csv');
+  assert.deepStrictEqual(summarize(rows, 'test.csv'), {
+    file: 'test.csv',
+    transactions: 3,
+    grandTotal: 135.5,
+    months: [
+      { month: '2026-01', total: 110 },
+      { month: '2026-02', total: 25.5 },
+    ],
+    categories: [
+      { category: 'Rent', total: 100 },
+      { category: 'Groceries', total: 35.5 },
+    ],
+    topCategory: { category: 'Rent', total: 100 },
+  });
+});
+
+test('summarize keeps months chronological and categories largest first', () => {
+  const rows = parseCsv(
+    [
+      'date,category,amount',
+      '2026-03-01,Small,1.00',
+      '2026-01-01,Big,100.00',
+      '2026-02-01,Medium,50.00',
+    ].join('\n'),
+    'test.csv',
+  );
+  const summary = summarize(rows, 'test.csv');
+  assert.deepStrictEqual(summary.months.map((m) => m.month), ['2026-01', '2026-02', '2026-03']);
+  assert.deepStrictEqual(summary.categories.map((c) => c.category), ['Big', 'Medium', 'Small']);
+});
+
+test('summarize reports floating-point sums rounded to cents', () => {
+  const rows = parseCsv(
+    ['date,category,amount', '2026-01-01,A,0.10', '2026-01-02,A,0.20'].join('\n'),
+    'test.csv',
+  );
+  const summary = summarize(rows, 'test.csv');
+  assert.strictEqual(summary.grandTotal, 0.3);
+  assert.strictEqual(summary.categories[0].total, 0.3);
+});
+
+test('summarize handles an empty row list without throwing', () => {
+  assert.deepStrictEqual(summarize([], 'test.csv'), {
+    file: 'test.csv',
+    transactions: 0,
+    grandTotal: 0,
+    months: [],
+    categories: [],
+    topCategory: null,
+  });
+});
+
+test('parseArgs defaults to expenses.csv in text mode', () => {
+  assert.deepStrictEqual(parseArgs([]), { file: 'expenses.csv', json: false });
+});
+
+test('parseArgs accepts a file, the --json flag, or both in either order', () => {
+  assert.deepStrictEqual(parseArgs(['other.csv']), { file: 'other.csv', json: false });
+  assert.deepStrictEqual(parseArgs(['--json']), { file: 'expenses.csv', json: true });
+  assert.deepStrictEqual(parseArgs(['--json', 'other.csv']), { file: 'other.csv', json: true });
+  assert.deepStrictEqual(parseArgs(['other.csv', '--json']), { file: 'other.csv', json: true });
+});
+
+test('parseArgs rejects unknown options and extra arguments', () => {
+  assert.throws(() => parseArgs(['--nope']), /unknown option: --nope/);
+  assert.throws(() => parseArgs(['-j']), /unknown option: -j/);
+  assert.throws(() => parseArgs(['a.csv', 'b.csv']), /unexpected extra argument: b\.csv/);
+});
+
 test('CLI prints the top category for the sample file', () => {
   const output = runCli();
   assert.match(output, /Total per month/);
   assert.match(output, /Total per category/);
   assert.match(output, /Grand total: 5225\.69/);
   assert.match(output, /Top category: Rent \(4350\.00\)/);
+});
+
+test('CLI --json emits nothing but a parseable JSON object', () => {
+  const summary = JSON.parse(runCli(['--json']));
+  assert.strictEqual(summary.file, 'expenses.csv');
+  assert.strictEqual(summary.transactions, 15);
+  assert.strictEqual(summary.grandTotal, 5225.69);
+  assert.deepStrictEqual(summary.topCategory, { category: 'Rent', total: 4350 });
+  assert.strictEqual(summary.months.length, 3);
+  assert.deepStrictEqual(summary.months[0], { month: '2026-01', total: 1741.47 });
+});
+
+test('CLI --json agrees with the text report on the same file', () => {
+  const summary = JSON.parse(runCli(['--json']));
+  const text = runCli();
+  assert.ok(text.includes('Grand total: ' + summary.grandTotal.toFixed(2)));
+  assert.ok(text.includes('(' + summary.topCategory.total.toFixed(2) + ')'));
+  assert.ok(text.includes(summary.transactions + ' transactions'));
+});
+
+test('CLI --json accepts a file argument', () => {
+  withCsv('date,category,amount\n2026-04-01,Books,7.50\n', (csv) => {
+    const summary = JSON.parse(runCli(['--json', csv]));
+    assert.strictEqual(summary.transactions, 1);
+    assert.deepStrictEqual(summary.categories, [{ category: 'Books', total: 7.5 }]);
+  });
 });
 
 test('CLI reads an absolute path regardless of the working directory', () => {
@@ -176,6 +283,33 @@ test('CLI reports a blank amount with file:line and exits 1', () => {
       },
     );
   });
+});
+
+test('CLI reports parse errors on stderr in --json mode too, not as JSON', () => {
+  // Machine-readable output does not imply machine-readable failures: a
+  // consumer checks the exit code, it does not parse stdout to find out.
+  withCsv('date,category,amount\n2026-01-01,Rent,oops\n', (csv) => {
+    assert.throws(
+      () => runCli(['--json', csv]),
+      (err) => {
+        assert.strictEqual(err.status, 1);
+        assert.strictEqual(err.stdout, '');
+        assert.match(err.stderr, /expenses: .*:2: amount is not a number/);
+        return true;
+      },
+    );
+  });
+});
+
+test('CLI exits 1 on an unknown option', () => {
+  assert.throws(
+    () => runCli(['--nope']),
+    (err) => {
+      assert.strictEqual(err.status, 1);
+      assert.match(err.stderr, /expenses: unknown option: --nope/);
+      return true;
+    },
+  );
 });
 
 test('CLI exits 1 with a message when the file is missing', () => {
