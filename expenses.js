@@ -111,6 +111,31 @@ function topCategory(rows) {
   return top === undefined ? null : { category: top[0], amount: top[1] };
 }
 
+// Rounds to cents for JSON output, where numbers stay numbers rather than
+// being formatted into strings the consumer would have to parse back.
+function round2(value) {
+  return Number(value.toFixed(2));
+}
+
+// The whole report as data. Both output modes render this, so the JSON and the
+// tables cannot drift apart. Its shape is the tool's machine-readable contract:
+// months and categories are arrays because their order is meaningful.
+function summarize(rows, file) {
+  const top = topCategory(rows);
+  return {
+    file,
+    transactions: rows.length,
+    grandTotal: round2(rows.reduce((sum, row) => sum + row.amount, 0)),
+    months: [...totalBy(rows, 'month')]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, total]) => ({ month, total: round2(total) })),
+    categories: [...totalBy(rows, 'category')]
+      .sort(byAmountDesc)
+      .map(([category, total]) => ({ category, total: round2(total) })),
+    topCategory: top === null ? null : { category: top.category, total: round2(top.amount) },
+  };
+}
+
 function money(value) {
   return value.toFixed(2);
 }
@@ -126,8 +151,29 @@ function printTable(title, entries) {
   console.log('');
 }
 
+// Hand-rolled rather than pulled from a library, and deliberately strict: an
+// unrecognized flag is a mistake worth reporting, not something to ignore.
+function parseArgs(argv) {
+  let file = null;
+  let json = false;
+
+  for (const arg of argv) {
+    if (arg === '--json') {
+      json = true;
+    } else if (arg.startsWith('-')) {
+      throw new Error(`unknown option: ${arg}`);
+    } else if (file === null) {
+      file = arg;
+    } else {
+      throw new Error(`unexpected extra argument: ${arg}`);
+    }
+  }
+
+  return { file: file === null ? DEFAULT_FILE : file, json };
+}
+
 function main() {
-  const file = process.argv[2] || DEFAULT_FILE;
+  const { file, json } = parseArgs(process.argv.slice(2));
   const resolved = path.resolve(file);
 
   let text;
@@ -140,20 +186,20 @@ function main() {
     throw err;
   }
 
-  const rows = parseCsv(text, file);
+  const summary = summarize(parseCsv(text, file), file);
 
-  // Months sort naturally as YYYY-MM strings; categories go largest spend first.
-  const byMonth = [...totalBy(rows, 'month')].sort((a, b) => a[0].localeCompare(b[0]));
-  const byCategory = [...totalBy(rows, 'category')].sort(byAmountDesc);
-  const grandTotal = rows.reduce((sum, row) => sum + row.amount, 0);
+  if (json) {
+    // The only thing on stdout, so the output can be piped straight into a
+    // JSON consumer without stripping a header first.
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
 
-  console.log(`Expense report for ${file} (${rows.length} transactions)\n`);
-  printTable('Total per month', byMonth);
-  printTable('Total per category', byCategory);
-  console.log(`Grand total: ${money(grandTotal)}`);
-
-  const top = topCategory(rows);
-  console.log(`Top category: ${top.category} (${money(top.amount)})`);
+  console.log(`Expense report for ${file} (${summary.transactions} transactions)\n`);
+  printTable('Total per month', summary.months.map((m) => [m.month, m.total]));
+  printTable('Total per category', summary.categories.map((c) => [c.category, c.total]));
+  console.log(`Grand total: ${money(summary.grandTotal)}`);
+  console.log(`Top category: ${summary.topCategory.category} (${money(summary.topCategory.total)})`);
 }
 
 if (require.main === module) {
@@ -165,4 +211,14 @@ if (require.main === module) {
   }
 }
 
-module.exports = { splitLine, parseCsv, totalBy, byAmountDesc, topCategory, money };
+module.exports = {
+  splitLine,
+  parseCsv,
+  totalBy,
+  byAmountDesc,
+  topCategory,
+  round2,
+  summarize,
+  parseArgs,
+  money,
+};
