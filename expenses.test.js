@@ -154,6 +154,7 @@ test('summarize produces the documented shape', () => {
   const rows = parseCsv(CSV, 'test.csv');
   assert.deepStrictEqual(summarize(rows, 'test.csv'), {
     file: 'test.csv',
+    month: null,
     transactions: 3,
     grandTotal: 135.5,
     months: [
@@ -196,6 +197,7 @@ test('summarize reports floating-point sums rounded to cents', () => {
 test('summarize handles an empty row list without throwing', () => {
   assert.deepStrictEqual(summarize([], 'test.csv'), {
     file: 'test.csv',
+    month: null,
     transactions: 0,
     grandTotal: 0,
     months: [],
@@ -205,14 +207,14 @@ test('summarize handles an empty row list without throwing', () => {
 });
 
 test('parseArgs defaults to expenses.csv in text mode', () => {
-  assert.deepStrictEqual(parseArgs([]), { file: 'expenses.csv', json: false });
+  assert.deepStrictEqual(parseArgs([]), { file: 'expenses.csv', json: false, month: null });
 });
 
 test('parseArgs accepts a file, the --json flag, or both in either order', () => {
-  assert.deepStrictEqual(parseArgs(['other.csv']), { file: 'other.csv', json: false });
-  assert.deepStrictEqual(parseArgs(['--json']), { file: 'expenses.csv', json: true });
-  assert.deepStrictEqual(parseArgs(['--json', 'other.csv']), { file: 'other.csv', json: true });
-  assert.deepStrictEqual(parseArgs(['other.csv', '--json']), { file: 'other.csv', json: true });
+  assert.deepStrictEqual(parseArgs(['other.csv']), { file: 'other.csv', json: false, month: null });
+  assert.deepStrictEqual(parseArgs(['--json']), { file: 'expenses.csv', json: true, month: null });
+  assert.deepStrictEqual(parseArgs(['--json', 'other.csv']), { file: 'other.csv', json: true, month: null });
+  assert.deepStrictEqual(parseArgs(['other.csv', '--json']), { file: 'other.csv', json: true, month: null });
 });
 
 test('parseArgs rejects unknown options and extra arguments', () => {
@@ -318,6 +320,99 @@ test('CLI exits 1 with a message when the file is missing', () => {
     (err) => {
       assert.strictEqual(err.status, 1);
       assert.match(err.stderr, /expenses: no such file: nope\.csv/);
+      return true;
+    },
+  );
+});
+
+test('parseArgs accepts --month in both spellings', () => {
+  assert.deepStrictEqual(parseArgs(['--month', '2026-03']), {
+    file: 'expenses.csv',
+    json: false,
+    month: '2026-03',
+  });
+  assert.deepStrictEqual(parseArgs(['--month=2026-03']), {
+    file: 'expenses.csv',
+    json: false,
+    month: '2026-03',
+  });
+  assert.deepStrictEqual(parseArgs(['--month=2026-03', '--json', 'other.csv']), {
+    file: 'other.csv',
+    json: true,
+    month: '2026-03',
+  });
+});
+
+test('parseArgs rejects a malformed or missing --month value', () => {
+  assert.throws(() => parseArgs(['--month', '2026-3']), /--month must be YYYY-MM, got "2026-3"/);
+  assert.throws(() => parseArgs(['--month', '2026']), /--month must be YYYY-MM/);
+  assert.throws(() => parseArgs(['--month', '2026-03-01']), /--month must be YYYY-MM/);
+  assert.throws(() => parseArgs(['--month']), /--month needs a value/);
+  assert.throws(() => parseArgs(['--month=']), /--month needs a value/);
+});
+
+test('parseArgs does not swallow the next flag as a --month value', () => {
+  // `--month --json` is a typo for a missing value, not a month called --json.
+  assert.throws(() => parseArgs(['--month', '--json']), /--month must be YYYY-MM/);
+});
+
+test('summarize records the month it was filtered to', () => {
+  const rows = parseCsv(CSV, 'test.csv').filter((row) => row.month === '2026-01');
+  const summary = summarize(rows, 'test.csv', '2026-01');
+  assert.strictEqual(summary.month, '2026-01');
+  assert.strictEqual(summary.transactions, 2);
+  assert.strictEqual(summary.grandTotal, 110);
+  assert.deepStrictEqual(summary.months, [{ month: '2026-01', total: 110 }]);
+});
+
+test('CLI --month reports only that month', () => {
+  const output = runCli(['--month', '2026-03']);
+  assert.match(output, /2026-03 only \(5 transactions\)/);
+  assert.match(output, /Grand total: 1790\.64/);
+  assert.match(output, /Top category: Rent \(1450\.00\)/);
+  // Rows from other months must not leak into the totals.
+  assert.ok(!output.includes('2026-01'));
+  assert.ok(!output.includes('2026-02'));
+});
+
+test('CLI --month totals are a subset that sums into the unfiltered report', () => {
+  const all = JSON.parse(runCli(['--json']));
+  const parts = all.months.map((m) => JSON.parse(runCli(['--json', '--month', m.month])));
+  const summed = round2(parts.reduce((total, part) => total + part.grandTotal, 0));
+  assert.strictEqual(summed, all.grandTotal);
+  assert.strictEqual(
+    parts.reduce((count, part) => count + part.transactions, 0),
+    all.transactions,
+  );
+});
+
+test('CLI --month works with --json and both spellings of the flag', () => {
+  const spaced = JSON.parse(runCli(['--json', '--month', '2026-02']));
+  const equals = JSON.parse(runCli(['--json', '--month=2026-02']));
+  assert.deepStrictEqual(spaced, equals);
+  assert.strictEqual(spaced.month, '2026-02');
+  assert.strictEqual(spaced.transactions, 5);
+});
+
+test('CLI --month reports an empty selection instead of printing an empty table', () => {
+  assert.throws(
+    () => runCli(['--month', '2019-01']),
+    (err) => {
+      assert.strictEqual(err.status, 1);
+      assert.match(err.stderr, /no transactions for 2019-01 in expenses\.csv/);
+      return true;
+    },
+  );
+});
+
+test('CLI --month rejects a malformed value before reading the file', () => {
+  assert.throws(
+    () => runCli(['--month', 'March', 'nope.csv']),
+    (err) => {
+      assert.strictEqual(err.status, 1);
+      // The month complaint wins: arguments are checked before any file is opened.
+      assert.match(err.stderr, /--month must be YYYY-MM/);
+      assert.ok(!err.stderr.includes('no such file'));
       return true;
     },
   );
