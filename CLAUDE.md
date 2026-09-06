@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 node expenses.js              # report on ./expenses.csv
 node expenses.js path/to.csv  # report on another file
 node expenses.js --json       # the same summary as one JSON object on stdout
+node expenses.js --month 2026-03    # only that month (--month=2026-03 also works)
 node expenses.js --json f.csv # flag and file in either order
 npm start                     # same as `node expenses.js` (no args passthrough)
 npm test                      # node --test, runs expenses.test.js
@@ -36,7 +37,8 @@ CSV with a header row containing `date`, `category`, `amount` (case-insensitive,
 - `totalBy(rows, key)` — the single aggregation primitive, returning a `Map`. Both reports are built from it; a new breakdown (e.g. per year) should be another `totalBy` call, not new summing logic.
 - `summarize(rows, file)` — the whole report as a plain object. Both output modes render this one value, which is what stops the JSON and the tables disagreeing; `main()` never re-derives a total for printing. A new figure belongs here first, then in each renderer.
 - `round2` — rounds to cents for JSON, where totals stay numbers. `money` (strings, trailing zeros) is for the text tables only. Do not swap them: `4350` and `"4350.00"` are both correct, for different consumers.
-- `parseArgs(argv)` — hand-rolled flag handling, strict about unknown options and extra positionals. `node:util`'s `parseArgs` is deliberately not used: it is experimental on Node 18, which CI still covers.
+- `parseArgs(argv)` — hand-rolled flag handling, strict about unknown options and extra positionals, and it validates `--month` before any file is opened so a typo is reported as a typo. `node:util`'s `parseArgs` is deliberately not used: it is experimental on Node 18, which CI still covers.
+- Month filtering happens in `main()`, between `parseCsv` and `summarize`, by filtering the row list. Every total therefore reflects the selection automatically — nothing downstream knows a filter was applied, and no aggregation function takes a month parameter. A future filter (by category, say) belongs in the same place.
 - `topCategory` — the single highest-spending category, built on `totalBy`.
 - `byAmountDesc` — the shared comparator for `[label, amount]` entries: largest first, ties broken on label. Both the category table and `topCategory` sort with it, which is what keeps the table's first row and the `Top category` line in agreement. Change the ordering here, not in one caller.
 - `printTable` — column widths are computed from the entries, so alignment adapts to the data.
@@ -46,6 +48,8 @@ Sort orders are deliberate: months ascending as `YYYY-MM` strings (which sort ch
 Errors are thrown as plain `Error`s from anywhere in the pipeline and caught once at the bottom of the file, which prefixes `expenses: ` and exits 1. Keep that single exit point — do not call `process.exit` from inner functions.
 
 Amounts are plain JavaScript numbers, formatted with `toFixed(2)` only at print time. Currency is not tracked or displayed.
+
+A `--month` that matches no rows is an error (`no transactions for ... `, exit 1), not an empty report. That is partly a judgement call and partly forced: `printTable` computes column widths with `Math.max` over the entries and yields `-Infinity` on an empty list, and `topCategory` returns `null`, so an empty summary cannot be rendered without special cases in both renderers.
 
 The `--json` shape is a public contract, not an internal dump: `months` and `categories` are arrays because their order carries meaning that an object would not promise to keep, and totals are numbers so a consumer can do arithmetic without parsing strings. Changing a key or a nesting level breaks whatever is reading it. Errors are deliberately *not* JSON — they stay as `expenses: ...` on stderr with exit 1, so a caller checks the exit code rather than parsing stdout to discover a failure. `--json` must also stay the only thing on stdout in that mode, or piping it breaks.
 

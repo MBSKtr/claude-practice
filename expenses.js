@@ -120,10 +120,11 @@ function round2(value) {
 // The whole report as data. Both output modes render this, so the JSON and the
 // tables cannot drift apart. Its shape is the tool's machine-readable contract:
 // months and categories are arrays because their order is meaningful.
-function summarize(rows, file) {
+function summarize(rows, file, month = null) {
   const top = topCategory(rows);
   return {
     file,
+    month,
     transactions: rows.length,
     grandTotal: round2(rows.reduce((sum, row) => sum + row.amount, 0)),
     months: [...totalBy(rows, 'month')]
@@ -155,11 +156,25 @@ function printTable(title, entries) {
 // unrecognized flag is a mistake worth reporting, not something to ignore.
 function parseArgs(argv) {
   let file = null;
+  let month = null;
   let json = false;
 
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
     if (arg === '--json') {
       json = true;
+    } else if (arg === '--month' || arg.startsWith('--month=')) {
+      // Both --month 2026-03 and --month=2026-03; the second is what people
+      // type out of habit, and silently ignoring it would be worse than
+      // either supporting it or rejecting it.
+      const value = arg === '--month' ? argv[++i] : arg.slice('--month='.length);
+      if (value === undefined || value === '') {
+        throw new Error('--month needs a value, e.g. --month 2026-03');
+      }
+      if (!/^[0-9]{4}-[0-9]{2}$/.test(value)) {
+        throw new Error(`--month must be YYYY-MM, got "${value}"`);
+      }
+      month = value;
     } else if (arg.startsWith('-')) {
       throw new Error(`unknown option: ${arg}`);
     } else if (file === null) {
@@ -169,11 +184,11 @@ function parseArgs(argv) {
     }
   }
 
-  return { file: file === null ? DEFAULT_FILE : file, json };
+  return { file: file === null ? DEFAULT_FILE : file, json, month };
 }
 
 function main() {
-  const { file, json } = parseArgs(process.argv.slice(2));
+  const { file, json, month } = parseArgs(process.argv.slice(2));
   const resolved = path.resolve(file);
 
   let text;
@@ -186,7 +201,16 @@ function main() {
     throw err;
   }
 
-  const summary = summarize(parseCsv(text, file), file);
+  const parsed = parseCsv(text, file);
+  const rows = month === null ? parsed : parsed.filter((row) => row.month === month);
+
+  // An empty result is reported rather than printed: printTable has no columns
+  // to measure and there would be no top category to name.
+  if (rows.length === 0) {
+    throw new Error(`no transactions for ${month} in ${file}`);
+  }
+
+  const summary = summarize(rows, file, month);
 
   if (json) {
     // The only thing on stdout, so the output can be piped straight into a
@@ -195,7 +219,8 @@ function main() {
     return;
   }
 
-  console.log(`Expense report for ${file} (${summary.transactions} transactions)\n`);
+  const scope = summary.month === null ? '' : `, ${summary.month} only`;
+  console.log(`Expense report for ${file}${scope} (${summary.transactions} transactions)\n`);
   printTable('Total per month', summary.months.map((m) => [m.month, m.total]));
   printTable('Total per category', summary.categories.map((c) => [c.category, c.total]));
   console.log(`Grand total: ${money(summary.grandTotal)}`);
